@@ -1,0 +1,23 @@
+# environment and downloaded binaries (see README for how to recreate them)
+.venv/
+.buildvenv/
+.uv-cache/
+models/
+tools/
+
+# user data and local state
+charts/
+downloads/
+settings.json
+gui_error.log
+test.wav
+*.osz
+
+# build output
+__pycache__/
+*.pyc
+build/
+dist/
+.build/
+*.spec
+*.exe
