@@ -2,8 +2,12 @@
 
 Left  : make a chart (file / YouTube, chart options, library) - runs chartgen.py in the venv
 Right : play the generated chart immediately (game.py)
+
+The UI language (ko / en / ja / zh) is chosen in the header, saved in settings.json, and applied
+live: every text is registered with reg() and re-applied by relabel().
 """
 import codecs
+import json
 import os
 import queue
 import re
@@ -21,8 +25,10 @@ if sys.stdout is None:                      # pythonw has no console
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 sys.path.insert(0, str(APP_DIR))
 
+import i18n                                  # noqa: E402
 import theme as T                            # noqa: E402
 from game import GamePanel                   # noqa: E402
+from i18n import LANGS, t as tr              # noqa: E402
 
 PYTHON = APP_DIR / ".venv" / "Scripts" / "python.exe"
 SCRIPT = APP_DIR / "chartgen.py"
@@ -30,22 +36,32 @@ TOOLS = APP_DIR / "tools"
 YT_DLP = TOOLS / "yt-dlp.exe"
 DOWNLOADS = APP_DIR / "downloads"
 CHARTS = APP_DIR / "charts"
+SETTINGS = APP_DIR / "settings.json"
 
-DIFFICULTIES = [("easy", "쉬움"), ("normal", "보통"), ("hard", "어려움"), ("insane", "매우 어려움")]
-VOCAL_MODES = [("ignore", "반주만 (보컬 무시)"), ("mix", "반주 + 보컬 함께"), ("only", "보컬만")]
+DIFFICULTIES = ["easy", "normal", "hard", "insane"]
+VOCAL_MODES = ["ignore", "mix", "only"]
 
 
 def safe_name(s):
     return re.sub(r'[\\/:*?"<>|]', "_", s).strip() or "chart"
 
 
+def saved_language():
+    """Language from settings.json, else the Windows UI language."""
+    try:
+        code = json.loads(SETTINGS.read_text(encoding="utf-8")).get("lang")
+    except (OSError, ValueError):
+        code = None
+    return code if code in LANGS else i18n.detect_lang()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("채보 생성 스튜디오")
+        i18n.set_lang(saved_language())
         self.geometry("1280x820")
         self.minsize(1120, 740)
-        T.apply(self)
+        T.apply(self, i18n.get_lang())
 
         self.proc = None
         self.job = None            # "chart" | "download"
@@ -53,6 +69,9 @@ class App(tk.Tk):
         self.result_path = None
         self.dl_file = None
         self.dl_title = None
+        self._labels = []          # (widget, option, i18n key, format args)
+        self._tabs = []            # (tab frame, i18n key)
+        self._status = ("status.idle", {})
 
         self.url = tk.StringVar()
         self.save_video = tk.BooleanVar(value=False)
@@ -62,7 +81,7 @@ class App(tk.Tk):
         self.artist = tk.StringVar(value="Unknown")
         self.creator = tk.StringVar(value="chartgen")
         self.keys = tk.IntVar(value=4)
-        self.diff = {k: tk.BooleanVar(value=(k == "normal")) for k, _ in DIFFICULTIES}
+        self.diff = {k: tk.BooleanVar(value=(k == "normal")) for k in DIFFICULTIES}
         self.vocals = tk.StringVar(value="ignore")
         self.long_notes = tk.BooleanVar(value=True)
         self.ln_ratio = tk.DoubleVar(value=0.35)
@@ -70,18 +89,61 @@ class App(tk.Tk):
         self.auto_bpm = tk.BooleanVar(value=True)
         self.bpm = tk.StringVar(value="120")
         self.seed = tk.IntVar(value=0)
+        self.lang_var = tk.StringVar(value=LANGS[i18n.get_lang()])
 
         self._build()
         self._refresh_library()
+        self.relabel()
         self.after(100, self._pump)
+
+    # ------------------------------------------------------------ translation helpers
+    def reg(self, widget, key, opt="text", **kw):
+        """Register a widget text for the language system and return the widget."""
+        self._labels.append((widget, opt, key, kw))
+        return widget
+
+    def relabel(self):
+        self.title(tr("app.title"))
+        for widget, opt, key, kw in self._labels:
+            widget.configure(**{opt: tr(key, **kw)})
+        for frame, key in self._tabs:
+            self.nb.tab(frame, text="  " + tr(key) + "  ")
+        self._render_status()
+
+    def _say(self, key, **kw):
+        self._status = (key, kw)
+        self._render_status()
+
+    def _render_status(self):
+        key, kw = self._status
+        self.status.configure(text=tr(key, **kw))
+
+    def _on_language(self, _event=None):
+        code = next(c for c, name in LANGS.items() if name == self.lang_var.get())
+        if code == i18n.get_lang():
+            return
+        i18n.set_lang(code)
+        T.apply(self, code)                                   # fonts differ per language
+        for w in (self.log, self.lib):                        # classic tk widgets do not follow ttk styles
+            w.configure(font=T.f(8))
+        for box in (self.lang_box,):
+            self.tk.call("destroy", f"{box}.popdown")
+        self.relabel()
+        self.game.relabel()
+        self.game.cfg["lang"] = code
+        self.game._save_cfg_later()
 
     # ------------------------------------------------------------ layout
     def _build(self):
         head = tk.Frame(self, bg=T.HEADER)
         head.pack(fill="x")
         tk.Frame(head, bg=T.TITLEBAR_ACCENT, width=4).pack(side="left", fill="y")
-        ttk.Label(head, text="채보 생성 스튜디오", style="Title.TLabel").pack(side="left", padx=(12, 8), pady=8)
-        ttk.Label(head, text="자동 채보 생성 · 테스트 플레이", style="Sub.TLabel").pack(side="left")
+        self.reg(ttk.Label(head, style="Title.TLabel"), "app.title").pack(side="left", padx=(12, 8), pady=8)
+        self.reg(ttk.Label(head, style="Sub.TLabel"), "app.subtitle").pack(side="left")
+        self.lang_box = ttk.Combobox(head, textvariable=self.lang_var, values=list(LANGS.values()),
+                                     state="readonly", width=10, takefocus=0)
+        self.lang_box.pack(side="right", padx=10)
+        self.lang_box.bind("<<ComboboxSelected>>", self._on_language)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
@@ -94,22 +156,23 @@ class App(tk.Tk):
         left.columnconfigure(0, weight=1)
         left.rowconfigure(1, weight=1)
 
-        nb = ttk.Notebook(left)
-        nb.grid(row=0, column=0, sticky="ew")
-        nb.add(self._tab_song(nb), text="  곡  ")
-        nb.add(self._tab_chart(nb), text="  채보  ")
-        nb.add(self._tab_library(nb), text="  라이브러리  ")
+        self.nb = ttk.Notebook(left)
+        self.nb.grid(row=0, column=0, sticky="ew")
+        for frame, key in ((self._tab_song(self.nb), "tab.song"), (self._tab_chart(self.nb), "tab.chart"),
+                           (self._tab_library(self.nb), "tab.library")):
+            self.nb.add(frame, text=key)
+            self._tabs.append((frame, key))
 
-        self.run_btn = ttk.Button(left, text="채보 생성", style="Accent.TButton", command=self._start)
+        self.run_btn = self.reg(ttk.Button(left, style="Accent.TButton", command=self._start), "btn.generate")
         self.run_btn.grid(row=2, column=0, sticky="ew", pady=(10, 4))
         row = ttk.Frame(left)
         row.grid(row=3, column=0, sticky="ew")
         row.columnconfigure(0, weight=1)
-        self.stop_btn = ttk.Button(row, text="중지", command=self._stop, state="disabled")
+        self.stop_btn = self.reg(ttk.Button(row, command=self._stop, state="disabled"), "btn.stop")
         self.stop_btn.grid(row=0, column=1, padx=(0, 4))
-        self.open_btn = ttk.Button(row, text="결과 폴더 열기", command=self._open_result, state="disabled")
+        self.open_btn = self.reg(ttk.Button(row, command=self._open_result, state="disabled"), "btn.open_folder")
         self.open_btn.grid(row=0, column=2)
-        self.status = ttk.Label(row, text="대기 중", style="Muted.TLabel")
+        self.status = ttk.Label(row, style="Muted.TLabel")
         self.status.grid(row=0, column=0, sticky="w")
         self.bar = ttk.Progressbar(left, mode="determinate", value=0)
         self.bar.grid(row=4, column=0, sticky="ew", pady=6)
@@ -123,69 +186,69 @@ class App(tk.Tk):
         self.log.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        self.game = GamePanel(body, APP_DIR / "settings.json", on_status=self._say)
+        self.game = GamePanel(body, SETTINGS, on_status=self._say)
         self.game.grid(row=0, column=1, sticky="nsew", padx=8, pady=8)
         self._sync()
 
     def _tab_song(self, nb):
         t = ttk.Frame(nb, padding=8)
         t.columnconfigure(0, weight=1)
-        f = ttk.LabelFrame(t, text="음악 파일")
+        f = self.reg(ttk.LabelFrame(t), "box.audio")
         f.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         f.columnconfigure(1, weight=1)
-        ttk.Label(f, text="입력").grid(row=0, column=0, padx=6, pady=4, sticky="w")
+        self.reg(ttk.Label(f), "lbl.input").grid(row=0, column=0, padx=6, pady=4, sticky="w")
         ttk.Entry(f, textvariable=self.audio).grid(row=0, column=1, sticky="ew", pady=4)
-        ttk.Button(f, text="찾아보기", command=self._pick_audio).grid(row=0, column=2, padx=6)
-        ttk.Label(f, text="저장").grid(row=1, column=0, padx=6, pady=4, sticky="w")
+        self.reg(ttk.Button(f, command=self._pick_audio), "btn.browse").grid(row=0, column=2, padx=6)
+        self.reg(ttk.Label(f), "lbl.save").grid(row=1, column=0, padx=6, pady=4, sticky="w")
         ttk.Entry(f, textvariable=self.out).grid(row=1, column=1, sticky="ew", pady=4)
-        ttk.Button(f, text="지정", command=self._pick_out).grid(row=1, column=2, padx=6)
-        ttk.Label(f, text=f"비워 두면 {CHARTS} 에 저장", style="Muted.TLabel").grid(
+        self.reg(ttk.Button(f, command=self._pick_out), "btn.pick").grid(row=1, column=2, padx=6)
+        self.reg(ttk.Label(f, style="Muted.TLabel"), "hint.default_out", path=CHARTS).grid(
             row=2, column=1, columnspan=2, sticky="w", pady=(0, 4))
 
-        y = ttk.LabelFrame(t, text="유튜브에서 가져오기")
+        y = self.reg(ttk.LabelFrame(t), "box.youtube")
         y.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         y.columnconfigure(1, weight=1)
-        ttk.Label(y, text="URL").grid(row=0, column=0, padx=6, pady=4, sticky="w")
+        self.reg(ttk.Label(y), "lbl.url").grid(row=0, column=0, padx=6, pady=4, sticky="w")
         ttk.Entry(y, textvariable=self.url).grid(row=0, column=1, sticky="ew", pady=4)
-        self.dl_btn = ttk.Button(y, text="가져오기", command=self._start_download)
+        self.dl_btn = self.reg(ttk.Button(y, command=self._start_download), "btn.fetch")
         self.dl_btn.grid(row=0, column=2, padx=6)
-        ttk.Checkbutton(y, text="영상(mp4)도 함께 저장", variable=self.save_video).grid(
+        self.reg(ttk.Checkbutton(y, variable=self.save_video), "chk.save_video").grid(
             row=1, column=1, columnspan=2, sticky="w")
-        ttk.Label(y, text=f"받은 파일: {DOWNLOADS}", style="Muted.TLabel").grid(
+        self.reg(ttk.Label(y, style="Muted.TLabel"), "hint.dl_dir", path=DOWNLOADS).grid(
             row=2, column=1, columnspan=2, sticky="w", pady=(0, 4))
 
-        m = ttk.LabelFrame(t, text="곡 정보")
+        m = self.reg(ttk.LabelFrame(t), "box.info")
         m.grid(row=2, column=0, sticky="ew")
         m.columnconfigure(1, weight=1)
-        for r, (label, var) in enumerate([("제목", self.title_v), ("아티스트", self.artist),
-                                          ("제작자", self.creator)]):
-            ttk.Label(m, text=label).grid(row=r, column=0, padx=6, pady=4, sticky="w")
+        for r, (key, var) in enumerate([("lbl.title", self.title_v), ("lbl.artist", self.artist),
+                                        ("lbl.creator", self.creator)]):
+            self.reg(ttk.Label(m), key).grid(row=r, column=0, padx=6, pady=4, sticky="w")
             ttk.Entry(m, textvariable=var).grid(row=r, column=1, sticky="ew", padx=(0, 6), pady=4)
         return t
 
     def _tab_chart(self, nb):
         t = ttk.Frame(nb, padding=8)
         t.columnconfigure(0, weight=1)
-        c = ttk.LabelFrame(t, text="채보 설정")
+        c = self.reg(ttk.LabelFrame(t), "box.chartset")
         c.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Label(c, text="키 개수").grid(row=0, column=0, padx=6, pady=6, sticky="w")
+        self.reg(ttk.Label(c), "lbl.keys").grid(row=0, column=0, padx=6, pady=6, sticky="w")
         ttk.Spinbox(c, from_=1, to=9, width=5, textvariable=self.keys).grid(row=0, column=1, sticky="w")
-        ttk.Label(c, text="4키, 6키 등", style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=8)
-        ttk.Label(c, text="난이도").grid(row=1, column=0, padx=6, pady=6, sticky="w")
+        self.reg(ttk.Label(c, style="Muted.TLabel"), "hint.keys").grid(row=0, column=2, sticky="w", padx=8)
+        self.reg(ttk.Label(c), "lbl.difficulty").grid(row=1, column=0, padx=6, pady=6, sticky="w")
         df = ttk.Frame(c)
         df.grid(row=1, column=1, columnspan=3, sticky="w")
-        for key, label in DIFFICULTIES:
-            ttk.Checkbutton(df, text=label, variable=self.diff[key]).pack(side="left", padx=(0, 8))
-        ttk.Label(c, text="보컬 처리").grid(row=2, column=0, padx=6, pady=6, sticky="w")
+        for key in DIFFICULTIES:
+            self.reg(ttk.Checkbutton(df, variable=self.diff[key]), "diff." + key).pack(side="left", padx=(0, 8))
+        self.reg(ttk.Label(c), "lbl.vocals").grid(row=2, column=0, padx=6, pady=6, sticky="w")
         vf = ttk.Frame(c)
         vf.grid(row=2, column=1, columnspan=3, sticky="w")
-        for key, label in VOCAL_MODES:
-            ttk.Radiobutton(vf, text=label, value=key, variable=self.vocals).pack(anchor="w")
+        for key in VOCAL_MODES:
+            self.reg(ttk.Radiobutton(vf, value=key, variable=self.vocals), "vocal." + key).pack(anchor="w")
 
-        ln = ttk.LabelFrame(t, text="롱노트")
+        ln = self.reg(ttk.LabelFrame(t), "box.ln")
         ln.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         ln.columnconfigure(1, weight=1)
-        ttk.Checkbutton(ln, text="롱노트 사용", variable=self.long_notes, command=self._sync).grid(
+        self.reg(ttk.Checkbutton(ln, variable=self.long_notes, command=self._sync), "chk.ln").grid(
             row=0, column=0, columnspan=3, padx=6, pady=4, sticky="w")
         self.ratio_lbl = ttk.Label(ln, width=6, style="Muted.TLabel")
         self.sus_lbl = ttk.Label(ln, width=6, style="Muted.TLabel")
@@ -193,30 +256,30 @@ class App(tk.Tk):
                                      command=lambda _v: self._sync_labels())
         self.sus_scale = ttk.Scale(ln, from_=0.3, to=0.95, variable=self.sustain,
                                    command=lambda _v: self._sync_labels())
-        ttk.Label(ln, text="비율 상한").grid(row=1, column=0, padx=6, sticky="w")
+        self.reg(ttk.Label(ln), "lbl.ln_ratio").grid(row=1, column=0, padx=6, sticky="w")
         self.ratio_scale.grid(row=1, column=1, sticky="ew")
         self.ratio_lbl.grid(row=1, column=2, padx=6)
-        ttk.Label(ln, text="판정 기준").grid(row=2, column=0, padx=6, pady=(0, 6), sticky="w")
+        self.reg(ttk.Label(ln), "lbl.ln_sus").grid(row=2, column=0, padx=6, pady=(0, 6), sticky="w")
         self.sus_scale.grid(row=2, column=1, sticky="ew", pady=(0, 6))
         self.sus_lbl.grid(row=2, column=2, padx=6, pady=(0, 6))
-        ttk.Label(ln, text="판정 기준을 낮추면 롱노트가 더 많이 생깁니다.", style="Muted.TLabel").grid(
+        self.reg(ttk.Label(ln, style="Muted.TLabel", wraplength=420), "hint.ln").grid(
             row=3, column=0, columnspan=3, padx=6, pady=(0, 4), sticky="w")
 
-        a = ttk.LabelFrame(t, text="고급")
+        a = self.reg(ttk.LabelFrame(t), "box.adv")
         a.grid(row=2, column=0, sticky="ew")
-        ttk.Checkbutton(a, text="BPM 자동 감지", variable=self.auto_bpm, command=self._sync).grid(
+        self.reg(ttk.Checkbutton(a, variable=self.auto_bpm, command=self._sync), "chk.auto_bpm").grid(
             row=0, column=0, padx=6, pady=6)
         self.bpm_entry = ttk.Entry(a, textvariable=self.bpm, width=7)
         self.bpm_entry.grid(row=0, column=1)
-        ttk.Label(a, text="BPM").grid(row=0, column=2, padx=(4, 16))
-        ttk.Label(a, text="시드").grid(row=0, column=3)
+        self.reg(ttk.Label(a), "lbl.bpm").grid(row=0, column=2, padx=(4, 16))
+        self.reg(ttk.Label(a), "lbl.seed").grid(row=0, column=3)
         ttk.Spinbox(a, from_=0, to=99999, width=7, textvariable=self.seed).grid(row=0, column=4, padx=6)
         return t
 
     def _tab_library(self, nb):
         t = ttk.Frame(nb, padding=8)
         t.columnconfigure(0, weight=1)
-        ttk.Label(t, text="만든 채보 (더블클릭하면 오른쪽 플레이어에 불러옵니다)", style="Muted.TLabel").grid(
+        self.reg(ttk.Label(t, style="Muted.TLabel", wraplength=430), "lib.hint").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
         self.lib = tk.Listbox(t, height=8, bg=T.PANEL, fg=T.TEXT, selectbackground=T.PINK,
                               selectforeground="white", relief="flat", highlightthickness=1,
@@ -225,15 +288,12 @@ class App(tk.Tk):
         self.lib.bind("<Double-Button-1>", lambda _e: self._load_selected())
         bar = ttk.Frame(t)
         bar.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Button(bar, text="불러오기", command=self._load_selected).pack(side="left")
-        ttk.Button(bar, text=".osz 열기...", command=self._open_osz).pack(side="left", padx=6)
-        ttk.Button(bar, text="새로고침", command=self._refresh_library).pack(side="left")
+        self.reg(ttk.Button(bar, command=self._load_selected), "btn.load").pack(side="left")
+        self.reg(ttk.Button(bar, command=self._open_osz), "btn.open_osz").pack(side="left", padx=6)
+        self.reg(ttk.Button(bar, command=self._refresh_library), "btn.refresh").pack(side="left")
         return t
 
     # ------------------------------------------------------------ helpers
-    def _say(self, text):
-        self.status.configure(text=text)
-
     def _sync(self):
         st = "normal" if self.long_notes.get() else "disabled"
         self.ratio_scale.configure(state=st)
@@ -247,16 +307,16 @@ class App(tk.Tk):
 
     def _pick_audio(self):
         p = filedialog.askopenfilename(
-            title="음악 파일 선택",
-            filetypes=[("오디오", "*.mp3 *.wav *.ogg *.flac *.m4a *.aac"), ("모든 파일", "*.*")])
+            title=tr("dlg.pick_audio"),
+            filetypes=[(tr("ft.audio"), "*.mp3 *.wav *.ogg *.flac *.m4a *.aac"), (tr("ft.all"), "*.*")])
         if p:
             self.audio.set(p)
             if not self.title_v.get():
                 self.title_v.set(Path(p).stem)
 
     def _pick_out(self):
-        p = filedialog.asksaveasfilename(title="저장 위치", defaultextension=".osz",
-                                         filetypes=[("osu! 비트맵", "*.osz")])
+        p = filedialog.asksaveasfilename(title=tr("dlg.save_as"), defaultextension=".osz",
+                                         filetypes=[(tr("ft.osz"), "*.osz")])
         if p:
             self.out.set(p)
 
@@ -296,7 +356,7 @@ class App(tk.Tk):
             self.game.load_osz(self.lib_paths[sel[0]])
 
     def _open_osz(self):
-        p = filedialog.askopenfilename(title="채보(.osz) 열기", filetypes=[("osu! 비트맵", "*.osz")])
+        p = filedialog.askopenfilename(title=tr("dlg.open_osz"), filetypes=[(tr("ft.osz"), "*.osz")])
         if p:
             self.game.load_osz(p)
 
@@ -304,12 +364,12 @@ class App(tk.Tk):
     def _command(self):
         audio = self.audio.get().strip().strip('"')
         if not audio or not Path(audio).is_file():
-            raise ValueError("음악 파일을 선택해 주세요.")
-        diffs = [k for k, _ in DIFFICULTIES if self.diff[k].get()]
+            raise ValueError(tr("err.no_audio"))
+        diffs = [k for k in DIFFICULTIES if self.diff[k].get()]
         if not diffs:
-            raise ValueError("난이도를 하나 이상 선택해 주세요.")
+            raise ValueError(tr("err.no_diff"))
         if not (PYTHON.exists() and SCRIPT.exists()):
-            raise ValueError(f"실행 환경을 찾을 수 없습니다.\n{PYTHON}\n{SCRIPT}")
+            raise ValueError(tr("err.no_env", python=PYTHON, script=SCRIPT))
         title = self.title_v.get().strip() or Path(audio).stem
         out = self.out.get().strip()
         if not out:
@@ -329,7 +389,7 @@ class App(tk.Tk):
                 if bpm <= 0:
                     raise ValueError
             except ValueError:
-                raise ValueError("BPM은 0보다 큰 숫자여야 합니다.")
+                raise ValueError(tr("err.bad_bpm"))
             cmd += ["--bpm", str(bpm)]
         return cmd
 
@@ -337,22 +397,22 @@ class App(tk.Tk):
         try:
             cmd = self._command()
         except ValueError as e:
-            messagebox.showwarning("확인", str(e))
+            messagebox.showwarning(tr("msg.check"), str(e))
             return
         self.game.stop()
         self.result_path = None
         self.open_btn.configure(state="disabled")
         self._clear_log()
-        self.status.configure(text="분석 중... (보컬 분리는 처음엔 오래 걸릴 수 있습니다)")
+        self._say("st.analyzing")
         self._begin("chart", [cmd])
 
     def _start_download(self):
         url = self.url.get().strip()
         if not re.match(r"https?://", url):
-            messagebox.showwarning("확인", "유튜브 URL을 입력해 주세요. (https://... 형태)")
+            messagebox.showwarning(tr("msg.check"), tr("err.bad_url"))
             return
         if not YT_DLP.exists() or not (TOOLS / "ffmpeg.exe").exists():
-            messagebox.showwarning("확인", f"yt-dlp.exe / ffmpeg.exe 를 찾을 수 없습니다.\n{TOOLS}")
+            messagebox.showwarning(tr("msg.check"), tr("err.no_tools", path=TOOLS))
             return
         base = [str(YT_DLP), "--no-playlist", "--encoding", "utf-8", "--windows-filenames", "--newline",
                 "--ffmpeg-location", str(TOOLS)]
@@ -364,7 +424,7 @@ class App(tk.Tk):
                                 "--merge-output-format", "mp4", "-o", out, url])
         self.dl_file = self.dl_title = None
         self._clear_log()
-        self.status.configure(text="유튜브에서 가져오는 중...")
+        self._say("st.fetching")
         self._begin("download", cmds)
 
     def _begin(self, job, cmds):
@@ -397,7 +457,7 @@ class App(tk.Tk):
                 if code != 0:
                     break
         except Exception as e:  # noqa: BLE001 - surface any launch failure in the UI
-            self.msgs.put(("line", f"실행 실패: {e}"))
+            self.msgs.put(("launch_fail", str(e)))
         self.msgs.put(("done", code))
 
     def _pump(self):
@@ -406,6 +466,8 @@ class App(tk.Tk):
                 kind, val = self.msgs.get_nowait()
                 if kind == "line":
                     self._on_line(val)
+                elif kind == "launch_fail":
+                    self._append(tr("log.launch_fail", err=val))
                 else:
                     self._on_done(val)
         except queue.Empty:
@@ -419,7 +481,7 @@ class App(tk.Tk):
         if self.job == "download":
             m = re.match(r"\[download\]\s+(\d+(?:\.\d+)?)%", line)
             if m:
-                self.status.configure(text=f"다운로드 중... {float(m.group(1)):.0f}%")
+                self._say("st.dl_pct", pct=f"{float(m.group(1)):.0f}")
                 return
             if line.startswith("TITLE="):
                 self.dl_title = line[6:]
@@ -430,7 +492,7 @@ class App(tk.Tk):
         if "%|" in line:  # tqdm progress: show in status only
             m = re.match(r"\s*(\d+)%", line)
             if m:
-                self.status.configure(text=f"보컬 분리 중... {m.group(1)}%")
+                self._say("st.sep_pct", pct=m.group(1))
             return
         if line.startswith("wrote "):
             self.result_path = line[6:].strip()
@@ -443,22 +505,22 @@ class App(tk.Tk):
             if code == 0 and self.dl_file and Path(self.dl_file).exists():
                 self.audio.set(self.dl_file)
                 self.title_v.set(self.dl_title or Path(self.dl_file).stem)
-                self.status.configure(text="가져오기 완료! 이제 '채보 생성'을 누르세요.")
+                self._say("st.dl_done")
             else:
-                self.status.configure(text="가져오기 실패 (URL이나 영상 공개 여부를 확인하세요)")
+                self._say("st.dl_fail")
             return
         if code == 0 and self.result_path:
             self.open_btn.configure(state="normal")
             self._refresh_library()
             if self.game.load_osz(self.result_path):
-                self.status.configure(text="완료! 오른쪽 플레이어에서 ▶ 시작을 눌러 테스트해 보세요.")
+                self._say("st.gen_done")
         else:
-            self.status.configure(text="실패 또는 중지됨")
+            self._say("st.gen_fail")
 
     def _stop(self):
         if self.proc:
             self.proc.terminate()
-            self._append("중지했습니다.")
+            self._append(tr("log.stopped"))
 
     def _open_result(self):
         if self.result_path and Path(self.result_path).exists():

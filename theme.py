@@ -25,35 +25,57 @@ RED = "#FF5050"
 CYAN = "#12FFFF"
 TITLEBAR_ACCENT = "#D6305A"
 
-# Galmuri11 (pixel font, SIL OFL 1.1 - see fonts/LICENSE.txt). Loaded for this process only,
-# nothing is installed system-wide. Falls back to Malgun Gothic if the files are missing.
+# Pixel fonts (both SIL OFL 1.1, licenses in fonts/), loaded for this process only - nothing is
+# installed system-wide. Missing files fall back to Malgun Gothic.
+#   Galmuri11 (Korean / English / Japanese) - Regular + Bold; its Bold has no kana/kanji, so
+#   Japanese uses Regular only.  Ark Pixel 12px zh_cn covers Simplified Chinese.
 FONT_DIR = Path(__file__).resolve().parent / "fonts"
+FONT_FILES = ("Galmuri11.ttf", "Galmuri11-Bold.ttf", "ArkPixel12-zh_cn.ttf")
 FONT = FONT_BOLD = "Malgun Gothic"
 PIXEL = False
+SCALE = 1.0                      # Ark Pixel is 12px (9pt), Galmuri 11px (8pt)
+_families = set()
 
 
 def load_fonts(root):
-    """Register the bundled pixel font (call once a Tk root exists)."""
-    global FONT, FONT_BOLD, PIXEL
+    """Register the bundled pixel fonts (once a Tk root exists)."""
+    global _families
     try:
-        for name in ("Galmuri11.ttf", "Galmuri11-Bold.ttf"):
+        for name in FONT_FILES:
             ctypes.windll.gdi32.AddFontResourceExW(str(FONT_DIR / name), 0x10, 0)   # FR_PRIVATE
-        fams = set(tkfont.families(root))
+        _families = set(tkfont.families(root))
     except (OSError, AttributeError):
-        return
-    if "Galmuri11 Regular" in fams and "Galmuri11 Bold" in fams:
-        FONT, FONT_BOLD, PIXEL = "Galmuri11 Regular", "Galmuri11 Bold", True
+        _families = set()
+
+
+def set_font_for(lang):
+    """Choose the font family for a UI language ('ko', 'en', 'ja', 'zh')."""
+    global FONT, FONT_BOLD, PIXEL, SCALE
+    if lang == "zh" and "Ark Pixel 12px Prop zh_cn" in _families:
+        FONT = FONT_BOLD = "Ark Pixel 12px Prop zh_cn"
+        PIXEL, SCALE = True, 9 / 8
+    elif "Galmuri11 Regular" in _families:
+        FONT = "Galmuri11 Regular"
+        FONT_BOLD = "Galmuri11 Bold" if lang in ("ko", "en") and "Galmuri11 Bold" in _families else FONT
+        PIXEL, SCALE = True, 1.0
+    else:
+        FONT = FONT_BOLD = "Malgun Gothic"
+        PIXEL, SCALE = False, 1.0
 
 
 def f(size, bold=False):
-    """Font tuple. Pixel fonts are sharpest at whole multiples of 8pt (=11px): 8, 16, 24, 32, 48."""
+    """Font tuple. Sizes are given in Galmuri points (sharpest at 8, 16, 24, 32, 48 = 1x..6x of 11px)."""
+    size = round(size * SCALE)
     if PIXEL:
         return (FONT_BOLD if bold else FONT, size)
     return (FONT, size, "bold") if bold else (FONT, size)
 
 
-def apply(root):
-    load_fonts(root)
+def apply(root, lang="ko"):
+    """Build (or rebuild, after a language change) all styles."""
+    if not _families:
+        load_fonts(root)
+    set_font_for(lang)
     root.configure(bg=BG)
     st = ttk.Style(root)
     st.theme_use("clam")
@@ -80,9 +102,10 @@ def apply(root):
            foreground=[("disabled", DIM)])
 
     for w in ("TCheckbutton", "TRadiobutton"):
-        st.configure(w, background=BG, foreground=TEXT, indicatorcolor=PANEL2, indicatorbackground=PANEL2)
-        st.map(w, indicatorcolor=[("selected", PINK)], background=[("active", BG)],
-               foreground=[("disabled", DIM)])
+        # clam draws the box with `indicatorbackground` and the mark with `indicatorforeground`
+        st.configure(w, background=BG, foreground=TEXT, indicatorforeground="white", indicatorbackground=PANEL2)
+        st.map(w, indicatorbackground=[("selected", PINK)], indicatorcolor=[("selected", PINK)],
+               background=[("active", BG)], foreground=[("disabled", DIM)])
 
     st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
     st.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(16, 7), borderwidth=0)
@@ -102,3 +125,4 @@ def apply(root):
     root.option_add("*TCombobox*Listbox.selectBackground", PINK)
     root.option_add("*TCombobox*Listbox.selectForeground", "white")
     root.option_add("*Font", f(8))
+    root.option_add("*TCombobox*Listbox.font", f(8))

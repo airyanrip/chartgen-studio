@@ -20,6 +20,7 @@ from pathlib import Path
 from tkinter import ttk
 
 import theme as T
+from i18n import t as tr          # `t` is a time variable throughout this module
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
@@ -45,7 +46,7 @@ KEY_NAMES = {32: "SPACE", 186: ";", 187: "=", 188: ",", 189: "-", 190: ".", 191:
              219: "[", 220: "\\", 221: "]", 222: "'", 13: "ENTER", 16: "SHIFT"}
 
 DEFAULT_CFG = dict(speed=1.0, offset_ms=0, volume=70, note_style="ring", effect="ripple",
-                   judge_scale=1.0, countdown=3, auto=False, keys={})
+                   judge_scale=1.0, countdown=3, auto=False, keys={}, lang=None)
 
 
 def key_label(code):
@@ -244,7 +245,8 @@ class GamePanel(ttk.Frame):
     def __init__(self, master, cfg_path, on_status=None):
         super().__init__(master)
         self.cfg_path = Path(cfg_path)
-        self.on_status = on_status or (lambda s: None)
+        self.on_status = on_status or (lambda key, **kw: None)     # on_status(text_key, **format_args)
+        self._labels = []          # (widget, option, i18n key) re-applied by relabel()
         self.cfg = self._load_cfg()
         self.charts, self.chart, self.tmp = [], None, None
         self.audio_path = None
@@ -299,13 +301,17 @@ class GamePanel(ttk.Frame):
         top = ttk.Frame(self)
         top.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
         top.columnconfigure(0, weight=1)
-        self.song_lbl = ttk.Label(top, text="채보를 만들거나 라이브러리에서 불러오세요", style="Song.TLabel")
+        def reg(widget, key, opt="text"):
+            self._labels.append((widget, opt, key))
+            return widget
+
+        self.song_lbl = ttk.Label(top, style="Song.TLabel")
         self.song_lbl.grid(row=0, column=0, sticky="w")
         self.diff_var = tk.StringVar()
-        self.diff_box = ttk.Combobox(top, textvariable=self.diff_var, state="readonly", width=18, takefocus=0)
+        self.diff_box = ttk.Combobox(top, textvariable=self.diff_var, state="readonly", width=22, takefocus=0)
         self.diff_box.grid(row=0, column=1, padx=6)
         self.diff_box.bind("<<ComboboxSelected>>", lambda _e: self._select_chart(self.diff_box.current()))
-        self.start_btn = ttk.Button(top, text="▶ 시작", width=8, command=self.start, takefocus=0)
+        self.start_btn = ttk.Button(top, width=10, command=self.start, takefocus=0)
         self.start_btn.grid(row=0, column=2)
         self.pause_btn = ttk.Button(top, text="II", width=4, command=self.toggle_pause, takefocus=0)
         self.pause_btn.grid(row=0, column=3, padx=4)
@@ -328,11 +334,11 @@ class GamePanel(ttk.Frame):
         self.v_offset = tk.IntVar(value=self.cfg["offset_ms"])
         self.v_count = tk.IntVar(value=self.cfg["countdown"])
         self.v_auto = tk.BooleanVar(value=self.cfg["auto"])
-        self.v_note = tk.StringVar(value="링" if self.cfg["note_style"] == "ring" else "직사각형")
-        self.v_fx = tk.StringVar(value="물결" if self.cfg["effect"] == "ripple" else "터지는 효과")
+        self.v_note = tk.StringVar()
+        self.v_fx = tk.StringVar()
 
-        def scale(row, col, text, var, lo, hi, key, fmt):
-            ttk.Label(s, text=text).grid(row=row, column=col, sticky="w", padx=(0, 4), pady=2)
+        def scale(row, col, label_key, var, lo, hi, key, fmt):
+            reg(ttk.Label(s), label_key).grid(row=row, column=col, sticky="w", padx=(0, 4), pady=2)
             lbl = ttk.Label(s, width=6, style="Muted.TLabel")
             sc = ttk.Scale(s, from_=lo, to=hi, variable=var, takefocus=0,
                            command=lambda _v, k=key, v=var, l=lbl, f=fmt: self._scale_changed(k, v, l, f))
@@ -340,35 +346,54 @@ class GamePanel(ttk.Frame):
             lbl.grid(row=row, column=col + 2, padx=(0, 12))
             self._scale_changed(key, var, lbl, fmt, save=False)
 
-        scale(0, 0, "노트 속도", self.v_speed, 0.5, 3.0, "speed", lambda v: f"x{v:.2f}")
-        scale(0, 3, "음악 음량", self.v_vol, 0, 100, "volume", lambda v: f"{v:.0f}%")
-        scale(0, 6, "판정 (넉넉↔빡빡)", self.v_judge, 1.5, 0.6, "judge_scale", lambda v: f"x{v:.2f}")
+        scale(0, 0, "game.speed", self.v_speed, 0.5, 3.0, "speed", lambda v: f"x{v:.2f}")
+        scale(0, 3, "game.volume", self.v_vol, 0, 100, "volume", lambda v: f"{v:.0f}%")
+        scale(0, 6, "game.judge", self.v_judge, 1.5, 0.6, "judge_scale", lambda v: f"x{v:.2f}")
 
-        ttk.Label(s, text="싱크(ms)").grid(row=1, column=0, sticky="w", pady=2)
+        reg(ttk.Label(s), "game.sync").grid(row=1, column=0, sticky="w", pady=2)
         ttk.Spinbox(s, from_=-300, to=300, increment=5, width=6, textvariable=self.v_offset, takefocus=0,
                     command=self._spin_changed).grid(row=1, column=1, sticky="w", padx=4)
-        ttk.Label(s, text="카운트다운(초)").grid(row=1, column=3, sticky="w")
+        reg(ttk.Label(s), "game.countdown").grid(row=1, column=3, sticky="w")
         ttk.Spinbox(s, from_=0, to=5, width=4, textvariable=self.v_count, takefocus=0,
                     command=self._spin_changed).grid(row=1, column=4, sticky="w", padx=4)
-        ttk.Checkbutton(s, text="퍼펙트 오토", variable=self.v_auto, takefocus=0,
-                        command=self._spin_changed).grid(row=1, column=6, sticky="w")
+        reg(ttk.Checkbutton(s, variable=self.v_auto, takefocus=0, command=self._spin_changed),
+            "game.auto").grid(row=1, column=6, sticky="w")
 
-        ttk.Label(s, text="노트 모양").grid(row=2, column=0, sticky="w", pady=2)
-        nb = ttk.Combobox(s, textvariable=self.v_note, values=["링", "직사각형"], state="readonly",
-                          width=10, takefocus=0)
-        nb.grid(row=2, column=1, sticky="w", padx=4)
-        nb.bind("<<ComboboxSelected>>", lambda _e: self._spin_changed())
-        ttk.Label(s, text="타격 이펙트").grid(row=2, column=3, sticky="w")
-        fb = ttk.Combobox(s, textvariable=self.v_fx, values=["물결", "터지는 효과"], state="readonly",
-                          width=12, takefocus=0)
-        fb.grid(row=2, column=4, sticky="w", padx=4)
-        fb.bind("<<ComboboxSelected>>", lambda _e: self._spin_changed())
-        ttk.Button(s, text="키 설정", command=self._rebind, takefocus=0).grid(row=2, column=6, sticky="w")
+        reg(ttk.Label(s), "game.note_shape").grid(row=2, column=0, sticky="w", pady=2)
+        self.note_box = ttk.Combobox(s, textvariable=self.v_note, state="readonly", width=12, takefocus=0)
+        self.note_box.grid(row=2, column=1, sticky="w", padx=4)
+        self.note_box.bind("<<ComboboxSelected>>", lambda _e: self._spin_changed())
+        reg(ttk.Label(s), "game.effect").grid(row=2, column=3, sticky="w")
+        self.fx_box = ttk.Combobox(s, textvariable=self.v_fx, state="readonly", width=14, takefocus=0)
+        self.fx_box.grid(row=2, column=4, sticky="w", padx=4)
+        self.fx_box.bind("<<ComboboxSelected>>", lambda _e: self._spin_changed())
+        reg(ttk.Button(s, command=self._rebind, takefocus=0), "game.keyset").grid(row=2, column=6, sticky="w")
         self.key_lbl = ttk.Label(s, text="", style="Muted.TLabel")
         self.key_lbl.grid(row=2, column=7, columnspan=2, sticky="w", padx=6)
-        ttk.Label(s, text="소리가 늦게 들리면 싱크를 +로, ESC 일시정지 · R 다시 시작", style="Muted.TLabel").grid(
+        reg(ttk.Label(s, style="Muted.TLabel"), "game.hint").grid(
             row=3, column=0, columnspan=9, sticky="w", pady=(4, 0))
+        self.relabel()
+
+    def relabel(self):
+        """Apply the current language to every text in the panel (also called when it changes)."""
+        for widget, opt, key in self._labels:
+            widget.configure(**{opt: tr(key)})
+        self.note_box.configure(values=[tr("note.ring"), tr("note.classic")])
+        self.v_note.set(tr("note.ring") if self.cfg["note_style"] == "ring" else tr("note.classic"))
+        self.fx_box.configure(values=[tr("fx.ripple"), tr("fx.burst")])
+        self.v_fx.set(tr("fx.ripple") if self.cfg["effect"] == "ripple" else tr("fx.burst"))
+        if self.chart is None:
+            self.song_lbl.configure(text=tr("game.placeholder"))
+        else:
+            cur = self.diff_box.current()
+            self.diff_box.configure(values=[tr("game.diff_item", version=c.version, n=len(c.notes))
+                                            for c in self.charts])
+            if cur >= 0:
+                self.diff_box.current(cur)
+        for box in (self.diff_box, self.note_box, self.fx_box):     # popdown lists keep the old font otherwise
+            self.tk.call("destroy", f"{box}.popdown")
         self._refresh_buttons()
+        self._dirty()
 
     def _scale_changed(self, key, var, lbl, fmt, save=True):
         v = var.get()
@@ -387,20 +412,20 @@ class GamePanel(ttk.Frame):
         except (tk.TclError, ValueError):
             pass
         self.cfg["auto"] = bool(self.v_auto.get())
-        self.cfg["note_style"] = "ring" if self.v_note.get() == "링" else "classic"
-        self.cfg["effect"] = "ripple" if self.v_fx.get() == "물결" else "burst"
+        self.cfg["note_style"] = "ring" if self.note_box.current() == 0 else "classic"
+        self.cfg["effect"] = "ripple" if self.fx_box.current() == 0 else "burst"
         self._save_cfg_later()
         self._dirty()
 
     def _refresh_buttons(self):
         have = self.chart is not None
         self.start_btn.configure(state="normal" if have else "disabled",
-                                 text="↻ 다시" if self.state != "idle" else "▶ 시작")
+                                 text=tr("game.again") if self.state != "idle" else tr("game.start"))
         self.pause_btn.configure(state="normal" if self.state in ("playing", "countdown", "paused") else "disabled")
         self.stop_btn.configure(state="normal" if self.state != "idle" else "disabled")
         if have:
             keys = self._keys_for(self.chart.keys)
-            self.key_lbl.configure(text="키: " + " ".join(key_label(k) for k in keys))
+            self.key_lbl.configure(text=tr("game.keys", keys=" ".join(key_label(k) for k in keys)))
 
     # ---------------------------------------------------------- chart loading
     def load_osz(self, path):
@@ -410,7 +435,7 @@ class GamePanel(ttk.Frame):
                 osus = sorted(n for n in z.namelist() if n.lower().endswith(".osu"))
                 audio = next((n for n in z.namelist() if n.lower().endswith((".mp3", ".ogg", ".wav"))), None)
                 if not osus or audio is None:
-                    raise ValueError("채보 또는 음악 파일이 없는 .osz 입니다.")
+                    raise ValueError(tr("game.err_osz"))
                 charts = sorted((parse_osu(z.read(n).decode("utf-8", "replace")) for n in osus),
                                 key=lambda c: len(c.notes))          # easiest first
                 self._drop_tmp()
@@ -419,14 +444,14 @@ class GamePanel(ttk.Frame):
                 with z.open(audio) as src, open(self.audio_path, "wb") as dst:
                     shutil.copyfileobj(src, dst)
         except (OSError, ValueError, zipfile.BadZipFile) as e:
-            self.on_status(f"채보를 불러오지 못했습니다: {e}")
+            self.on_status("game.st_load_fail", err=e)
             return False
         self.stop()
         self.charts = charts
-        self.diff_box.configure(values=[f"{c.version}  ({len(c.notes)}노트)" for c in charts])
+        self.diff_box.configure(values=[tr("game.diff_item", version=c.version, n=len(c.notes)) for c in charts])
         self.diff_box.current(0)
         self._select_chart(0)
-        self.on_status(f"불러옴: {path.name}")
+        self.on_status("game.st_loaded", name=path.name)
         return True
 
     def _select_chart(self, i):
@@ -461,7 +486,7 @@ class GamePanel(ttk.Frame):
                 pygame.mixer.init(frequency=44100)
                 self.pg = pygame
             except Exception as e:  # noqa: BLE001 - missing pygame / no output device
-                self.on_status(f"오디오를 초기화하지 못했습니다: {e}")
+                self.on_status("game.st_audio_fail", err=e)
                 return None
         return self.pg
 
@@ -475,7 +500,7 @@ class GamePanel(ttk.Frame):
         try:
             pg.mixer.music.load(self.audio_path)
         except Exception as e:  # noqa: BLE001
-            self.on_status(f"음악을 재생하지 못했습니다: {e}")
+            self.on_status("game.st_play_fail", err=e)
             return
         pg.mixer.music.set_volume(self.cfg["volume"] / 100)
         pg.mixer.music.stop()
@@ -563,22 +588,22 @@ class GamePanel(ttk.Frame):
 
     def _rebind(self):
         if self.chart is None:
-            self.on_status("먼저 채보를 불러와 주세요.")
+            self.on_status("game.st_need_chart")
             return
         self.stop()
         n = self.chart.keys
         new = []
         dlg = tk.Toplevel(self)
-        dlg.title("키 설정")
+        dlg.title(tr("keydlg.title"))
         dlg.configure(bg=T.BG)
         dlg.transient(self.winfo_toplevel())
         dlg.geometry("340x130")
         msg = ttk.Label(dlg, style="Song.TLabel")
         msg.pack(pady=(24, 4))
-        ttk.Label(dlg, text="Esc: 취소", style="Muted.TLabel").pack()
+        ttk.Label(dlg, text=tr("keydlg.cancel"), style="Muted.TLabel").pack()
 
         def prompt():
-            msg.configure(text=f"레인 {len(new) + 1} / {n} — 키를 누르세요…")
+            msg.configure(text=tr("keydlg.prompt", i=len(new) + 1, n=n))
 
         def on_key(ev):
             if ev.keysym == "Escape":
@@ -672,7 +697,7 @@ class GamePanel(ttk.Frame):
         c.create_line(x0, jy, x0 + fw, jy, fill=T.PINK, width=3)
 
         if self.chart is None:
-            c.create_text(w / 2, h / 2, text="오른쪽 위에서 채보를 불러오세요", fill=T.MUTED,
+            c.create_text(w / 2, h / 2, text=tr("cv.load_hint"), fill=T.MUTED,
                           font=T.f(11))
             return
         klist = self._keys_for(keys)
@@ -690,7 +715,7 @@ class GamePanel(ttk.Frame):
         if self.sess is None:
             c.create_text(w / 2, top + 60, text=f"{self.chart.keys}K  ·  {self.chart.version}", fill=T.LPINK,
                           font=T.f(16, True))
-            c.create_text(w / 2, top + 92, text="▶ 시작을 누르세요", fill=T.MUTED, font=T.f(11))
+            c.create_text(w / 2, top + 92, text=tr("cv.press_start"), fill=T.MUTED, font=T.f(11))
             return
 
         t = self._song_time()
@@ -768,8 +793,8 @@ class GamePanel(ttk.Frame):
                           font=T.f(48, True))
         elif self.state == "paused":
             c.create_rectangle(x0, 0, x0 + fw, h, fill=T.BG, stipple="gray50", outline="")
-            c.create_text(w / 2, h / 2 - 30, text="일시정지", fill="white", font=T.f(24, True))
-            c.create_text(w / 2, h / 2 + 10, text="Enter 계속하기  ·  R 다시 시작  ·  Q 곡 선택", fill=T.LPINK,
+            c.create_text(w / 2, h / 2 - 30, text=tr("cv.paused"), fill="white", font=T.f(24, True))
+            c.create_text(w / 2, h / 2 + 10, text=tr("cv.pause_keys"), fill=T.LPINK,
                           font=T.f(8))
         elif self.state == "result":
             s = self.sess
@@ -777,7 +802,7 @@ class GamePanel(ttk.Frame):
             cx = w / 2
             c.create_text(cx, 90, text=s.grade(), fill=T.PINK_HOT, font=T.f(24, True))
             c.create_text(cx, 150, text=f"{s.score():07d}", fill="white", font=T.f(32, True))
-            c.create_text(cx, 194, text=f"정확도 {s.accuracy():.2f}%   ·   MAX COMBO {s.max_combo}", fill=T.LPINK,
+            c.create_text(cx, 194, text=tr("cv.accuracy", acc=f"{s.accuracy():.2f}", combo=s.max_combo), fill=T.LPINK,
                           font=T.f(11))
             for i, (name, col, _) in enumerate(JUDGES):
                 c.create_text(cx - 70, 240 + i * 26, anchor="w", text=name, fill=col, font=T.f(11, True))
@@ -786,4 +811,4 @@ class GamePanel(ttk.Frame):
             c.create_text(cx - 70, 240 + 3 * 26, anchor="w", text="MISS", fill=MISS_COLOR, font=T.f(11, True))
             c.create_text(cx + 70, 240 + 3 * 26, anchor="e", text=str(s.counts["MISS"]), fill="white",
                           font=T.f(11))
-            c.create_text(cx, 240 + 4 * 26 + 20, text="R 다시 시작  ·  ■ 로 곡 선택", fill=T.MUTED, font=T.f(8))
+            c.create_text(cx, 240 + 4 * 26 + 20, text=tr("cv.result_keys"), fill=T.MUTED, font=T.f(8))

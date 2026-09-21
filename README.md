@@ -1,5 +1,7 @@
 # 채보 생성 스튜디오
 
+**한국어** | [English](README.en.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
+
 음악 파일(또는 유튜브 URL)에서 리듬게임 채보를 자동으로 만들고, 프로그램 안에서 바로 쳐 볼 수 있는 도구입니다.
 출력은 **osu!mania `.osz`** 이고 일반 노트와 **롱노트**를 지원합니다.
 
@@ -14,7 +16,8 @@
   - 보컬이 나오는 구간은 `<이름>.vocals.json` 으로 따로 저장되어, 가사(예: Whisper)를 나중에 맞춰 붙일 수 있습니다.
 - **유튜브 가져오기**: yt-dlp + ffmpeg 로 URL에서 오디오(선택: 1080p 영상)를 받습니다.
 - **테스트 플레이어**: 만든 채보를 창 오른쪽에서 바로 플레이합니다. PERFECT / GREAT / GOOD / MISS 판정, FEVER 게이지, 링/직사각형 노트, 물결/터지는 이펙트, 노트 속도·싱크·판정 폭 조절, 키 설정, 일시정지(ESC)·다시 시작(R)을 지원합니다.
-- 도트풍 [갈무리(Galmuri)](https://github.com/quiple/galmuri) 폰트를 사용합니다 (SIL OFL 1.1, `fonts/LICENSE.txt`).
+- **다국어 UI**: 한국어 / English / 日本語 / 简体中文. 창 오른쪽 위에서 고르면 바로 바뀌고 다음 실행에도 유지됩니다. 처음에는 윈도우 표시 언어를 따릅니다. (판정 이름 PERFECT / GREAT / GOOD / MISS 등 게임 용어는 모든 언어에서 영어 그대로입니다)
+- 도트풍 폰트를 사용합니다: [갈무리(Galmuri)](https://github.com/quiple/galmuri) (한국어·영어·일본어), [Ark Pixel](https://github.com/TakWolf/ark-pixel-font) (중국어). 둘 다 SIL OFL 1.1 이고 라이선스는 `fonts/` 에 있습니다.
 
 ## 요구 사항
 
@@ -96,9 +99,13 @@ run.bat "song.mp3" --keys 4 --difficulty normal,hard --vocals mix
 | `chartgen.py` | 채보 생성 (분석 → 박자 격자 → 온셋/롱노트 → 레인 배치 → `.osz`) |
 | `game.py` | 테스트 플레이어. 채점 로직(`Session`)은 GUI/오디오와 분리되어 있습니다 |
 | `gui.py` | 메인 창 (곡/채보/라이브러리 탭 + 플레이어) |
-| `theme.py` | 색상, 폰트 로딩, ttk 스타일 |
+| `theme.py` | 색상, 언어별 폰트 로딩, ttk 스타일 |
+| `i18n.py` | 4개 언어 번역 테이블 (`t("키")`). 문구를 고치거나 언어를 추가하는 곳입니다 |
 | `launcher.py` | exe 런처 |
 | `tests/test_session.py` | 채점 로직 테스트 (`.venv\Scripts\python.exe tests\test_session.py`) |
+| `tests/test_i18n.py` | 번역 테스트: 키 누락, `{자리표시자}` 일치, 폰트에 없는 글자 검사 (글자 검사는 `pip install fonttools` 필요) |
+
+번역을 고치려면 `i18n.py` 의 해당 줄만 수정하면 됩니다. 새 문구를 추가하면 4개 언어를 모두 채워야 `tests/test_i18n.py` 가 통과합니다.
 
 ## 알아둘 점
 
@@ -109,4 +116,4 @@ run.bat "song.mp3" --keys 4 --difficulty normal,hard --vocals mix
 
 ## 서드파티
 
-demucs (MIT), librosa (ISC), PyTorch (BSD), pygame (LGPL), yt-dlp (Unlicense), FFmpeg (LGPL/GPL 빌드에 따름), Deno (MIT), Galmuri 폰트 (SIL OFL 1.1).
+demucs (MIT), librosa (ISC), PyTorch (BSD), pygame (LGPL), yt-dlp (Unlicense), FFmpeg (LGPL/GPL 빌드에 따름), Deno (MIT), Galmuri 폰트 (SIL OFL 1.1), Ark Pixel 폰트 (SIL OFL 1.1).
